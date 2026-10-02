@@ -1,10 +1,141 @@
 import Cocoa
 
+final class ShortcutOverlayView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "Dock Hotkeys")
+    private let subtitleLabel = NSTextField(labelWithString: "Press Option+1-9 to switch apps")
+    private let rowsStack = NSStackView()
+    private let footerLabel = NSTextField(labelWithString: "Option+0 toggles this panel")
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupUI()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupUI()
+    }
+
+    func update(appNames: [String]) {
+        rowsStack.arrangedSubviews.forEach { view in
+            rowsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        if appNames.isEmpty {
+            let emptyLabel = NSTextField(labelWithString: "No pinned Dock apps were found.")
+            emptyLabel.font = .systemFont(ofSize: 16, weight: .medium)
+            emptyLabel.textColor = NSColor.white.withAlphaComponent(0.82)
+            rowsStack.addArrangedSubview(emptyLabel)
+            return
+        }
+
+        for (offset, appName) in appNames.enumerated() {
+            rowsStack.addArrangedSubview(makeRow(index: offset + 1, appName: appName))
+        }
+    }
+
+    private func setupUI() {
+        let effectView = NSVisualEffectView()
+        effectView.translatesAutoresizingMaskIntoConstraints = false
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 24
+        effectView.layer?.masksToBounds = true
+        effectView.layer?.borderWidth = 1
+        effectView.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        effectView.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.94).cgColor
+        addSubview(effectView)
+
+        NSLayoutConstraint.activate([
+            effectView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            effectView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            effectView.topAnchor.constraint(equalTo: topAnchor),
+            effectView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        let contentStack = NSStackView()
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        contentStack.orientation = .vertical
+        contentStack.alignment = .leading
+        contentStack.spacing = 16
+
+        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
+        titleLabel.textColor = .white
+
+        subtitleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.7)
+
+        rowsStack.orientation = .vertical
+        rowsStack.alignment = .leading
+        rowsStack.spacing = 10
+
+        footerLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        footerLabel.textColor = NSColor.white.withAlphaComponent(0.6)
+
+        [titleLabel, subtitleLabel, rowsStack, footerLabel].forEach(contentStack.addArrangedSubview)
+        effectView.addSubview(contentStack)
+
+        NSLayoutConstraint.activate([
+            contentStack.leadingAnchor.constraint(equalTo: effectView.leadingAnchor, constant: 24),
+            contentStack.trailingAnchor.constraint(equalTo: effectView.trailingAnchor, constant: -24),
+            contentStack.topAnchor.constraint(equalTo: effectView.topAnchor, constant: 24),
+            contentStack.bottomAnchor.constraint(equalTo: effectView.bottomAnchor, constant: -24),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 420)
+        ])
+    }
+
+    private func makeRow(index: Int, appName: String) -> NSView {
+        let rowStack = NSStackView()
+        rowStack.orientation = .horizontal
+        rowStack.alignment = .centerY
+        rowStack.spacing = 12
+
+        let badge = makeBadge(text: "Option+\(index)")
+        let nameLabel = NSTextField(labelWithString: appName)
+        nameLabel.font = .systemFont(ofSize: 18, weight: .semibold)
+        nameLabel.textColor = .white
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        rowStack.addArrangedSubview(badge)
+        rowStack.addArrangedSubview(nameLabel)
+        return rowStack
+    }
+
+    private func makeBadge(text: String) -> NSView {
+        let container = NSView()
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 9
+        container.layer?.backgroundColor = NSColor(calibratedRed: 0.18, green: 0.55, blue: 1.0, alpha: 0.9).cgColor
+
+        let label = NSTextField(labelWithString: text)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .monospacedSystemFont(ofSize: 14, weight: .bold)
+        label.textColor = .white
+
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6)
+        ])
+
+        return container
+    }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
     var debugMenuItem: NSMenuItem!
+    var overlayMenuItem: NSMenuItem!
     var eventTap: CFMachPort?
     var runLoopSource: CFRunLoopSource?
+    var shortcutOverlayPanel: NSPanel?
+    var shortcutOverlayView: ShortcutOverlayView?
 
     // Virtual key codes for digits 1–9 (US layout, but these are standard across layouts)
     static let digitKeyCodes: [Int64: Int] = [
@@ -18,6 +149,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         28: 7, // 8
         25: 8  // 9
     ]
+    static let overlayToggleKeyCode: Int64 = 29 // 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBar()
@@ -68,6 +200,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        overlayMenuItem = NSMenuItem(title: "Show Hotkeys Overlay", action: #selector(toggleShortcutOverlay), keyEquivalent: "")
+        overlayMenuItem.target = self
+        menu.addItem(overlayMenuItem)
+
         let reloadItem = NSMenuItem(title: "Reload Dock Apps", action: #selector(reloadDockApps), keyEquivalent: "")
         reloadItem.target = self
         menu.addItem(reloadItem)
@@ -95,6 +231,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             debugMenu.addItem(item)
         }
         debugMenuItem.submenu = debugMenu
+        refreshShortcutOverlay()
     }
 
     func setupEventTap() {
@@ -134,10 +271,104 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard flags.intersection(watched) == [.maskAlternate] else { return false }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        if keyCode == AppDelegate.overlayToggleKeyCode {
+            DispatchQueue.main.async { self.toggleShortcutOverlay() }
+            return true
+        }
+
         guard let index = AppDelegate.digitKeyCodes[keyCode] else { return false }
 
         DispatchQueue.main.async { self.activateDockApp(at: index) }
         return true  // consumed
+    }
+
+    // MARK: - Overlay
+
+    @objc func toggleShortcutOverlay() {
+        ensureShortcutOverlay()
+
+        guard let panel = shortcutOverlayPanel else { return }
+        if panel.isVisible {
+            panel.orderOut(nil)
+        } else {
+            refreshShortcutOverlay()
+            centerOverlay(panel)
+            panel.orderFrontRegardless()
+        }
+
+        updateOverlayMenuTitle()
+    }
+
+    func ensureShortcutOverlay() {
+        guard shortcutOverlayPanel == nil else { return }
+
+        let overlayView = ShortcutOverlayView(frame: NSRect(x: 0, y: 0, width: 440, height: 320))
+        overlayView.translatesAutoresizingMaskIntoConstraints = false
+
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 440, height: 320),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.isMovable = false
+        panel.ignoresMouseEvents = true
+        panel.contentView = overlayView
+
+        shortcutOverlayPanel = panel
+        shortcutOverlayView = overlayView
+        refreshShortcutOverlay()
+    }
+
+    func refreshShortcutOverlay() {
+        let appNames = dockAppURLs().prefix(9).map { url in
+            Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String
+                ?? url.deletingPathExtension().lastPathComponent
+        }
+
+        shortcutOverlayView?.update(appNames: Array(appNames))
+        resizeOverlayToFit()
+        updateOverlayMenuTitle()
+    }
+
+    func resizeOverlayToFit() {
+        guard let panel = shortcutOverlayPanel, let contentView = shortcutOverlayView else { return }
+
+        contentView.layoutSubtreeIfNeeded()
+        let fittingSize = contentView.fittingSize
+        let size = NSSize(width: max(440, fittingSize.width), height: max(220, fittingSize.height))
+        var frame = panel.frame
+        frame.size = size
+        panel.setFrame(frame, display: false)
+    }
+
+    func centerOverlay(_ panel: NSPanel) {
+        let mouseLocation = NSEvent.mouseLocation
+        let targetScreen = NSScreen.screens.first(where: { NSMouseInRect(mouseLocation, $0.frame, false) })
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+
+        guard let screen = targetScreen else { return }
+
+        let visibleFrame = screen.visibleFrame
+        let origin = NSPoint(
+            x: visibleFrame.midX - (panel.frame.width / 2),
+            y: visibleFrame.midY - (panel.frame.height / 2)
+        )
+        panel.setFrameOrigin(origin)
+    }
+
+    func updateOverlayMenuTitle() {
+        overlayMenuItem?.title = shortcutOverlayPanel?.isVisible == true
+            ? "Hide Hotkeys Overlay"
+            : "Show Hotkeys Overlay"
     }
 
     // MARK: - Dock

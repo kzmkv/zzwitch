@@ -5,6 +5,7 @@ A minimal macOS menu bar app that switches between your pinned Dock apps using k
 ## Usage
 
 Press **Option+1–9** to activate or launch the corresponding app from your Dock (left to right).
+Press **Option+0** to show or hide a centered overlay listing the current hotkeys and mapped app names.
 
 - If the app is already running, it is brought to the front.
 - If it is not running, it is launched.
@@ -12,6 +13,7 @@ Press **Option+1–9** to activate or launch the corresponding app from your Doc
 The menu bar icon (**W**) provides:
 
 - **Debug** — submenu listing your current pinned Dock apps by position, clickable for testing
+- **Show/Hide Hotkeys Overlay** — toggles the centered shortcut reference window
 - **Reload Dock Apps** — re-reads the Dock after you add, remove, or reorder pinned apps
 - **Quit**
 
