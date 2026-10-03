@@ -12,9 +12,10 @@ Press **Option+0** to show or hide a centered overlay listing the current hotkey
 
 The menu bar icon (**W**) provides:
 
-- **Debug** — submenu listing your current pinned Dock apps by position, clickable for testing
+- **Dock Apps** — submenu listing your pinned Dock apps with their Option+1–9 shortcuts on the right; click an app to activate or launch it
 - **Show/Hide Hotkeys Overlay** — toggles the centered shortcut reference window
 - **Reload Dock Apps** — re-reads the Dock after you add, remove, or reorder pinned apps
+- **Run on startup** — check to launch zzwitch automatically when you log in; uncheck to disable. On macOS 13+, a dash means approval is pending in System Settings → General → Login Items. On macOS 12, this uses a per-user LaunchAgent.
 - **Quit**
 
 ## Build

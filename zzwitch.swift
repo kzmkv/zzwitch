@@ -1,4 +1,5 @@
 import Cocoa
+import ServiceManagement
 
 final class ShortcutOverlayView: NSView {
     private let titleLabel = NSTextField(labelWithString: "Dock Hotkeys")
@@ -128,10 +129,11 @@ final class ShortcutOverlayView: NSView {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
-    var debugMenuItem: NSMenuItem!
+    var dockAppsMenuItem: NSMenuItem!
     var overlayMenuItem: NSMenuItem!
+    var startupMenuItem: NSMenuItem!
     var eventTap: CFMachPort?
     var runLoopSource: CFRunLoopSource?
     var shortcutOverlayPanel: NSPanel?
@@ -193,10 +195,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.image = makeStatusBarIcon()
 
         let menu = NSMenu()
+        menu.delegate = self
 
-        debugMenuItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
-        debugMenuItem.submenu = NSMenu()
-        menu.addItem(debugMenuItem)
+        dockAppsMenuItem = NSMenuItem(title: "Dock Apps", action: nil, keyEquivalent: "")
+        dockAppsMenuItem.submenu = NSMenu()
+        menu.addItem(dockAppsMenuItem)
 
         menu.addItem(.separator())
 
@@ -209,6 +212,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(reloadItem)
 
         menu.addItem(.separator())
+        startupMenuItem = NSMenuItem(title: "Run on startup", action: #selector(toggleRunOnStartup), keyEquivalent: "")
+        startupMenuItem.target = self
+        menu.addItem(startupMenuItem)
+        updateStartupMenuItem()
+
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(
             title: "Quit",
             action: #selector(NSApplication.terminate(_:)),
@@ -219,18 +228,110 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         reloadDockApps()
     }
 
+    // MARK: - Run on startup
+
+    private var legacyStartupURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.local.zzwitch.startup.plist")
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        updateStartupMenuItem()
+    }
+
+    private func updateStartupMenuItem() {
+        if #available(macOS 13.0, *) {
+            switch SMAppService.mainApp.status {
+            case .enabled:
+                startupMenuItem.state = .on
+            case .requiresApproval:
+                startupMenuItem.state = .mixed
+            default:
+                startupMenuItem.state = .off
+            }
+        } else {
+            startupMenuItem.state = FileManager.default.fileExists(atPath: legacyStartupURL.path) ? .on : .off
+        }
+    }
+
+    @objc func toggleRunOnStartup() {
+        defer { updateStartupMenuItem() }
+
+        guard Bundle.main.bundleURL.pathExtension == "app" else {
+            showStartupError("Run zzwitch from its .app bundle to configure startup.")
+            return
+        }
+
+        do {
+            if #available(macOS 13.0, *) {
+                let service = SMAppService.mainApp
+                if service.status == .enabled || service.status == .requiresApproval {
+                    try service.unregister()
+                } else {
+                    try service.register()
+                    if service.status == .requiresApproval {
+                        requestStartupApproval()
+                    }
+                }
+            } else {
+                let fileManager = FileManager.default
+                if fileManager.fileExists(atPath: legacyStartupURL.path) {
+                    try fileManager.removeItem(at: legacyStartupURL)
+                } else {
+                    let propertyList: [String: Any] = [
+                        "Label": "com.local.zzwitch.startup",
+                        "ProgramArguments": ["/usr/bin/open", "-g", Bundle.main.bundleURL.path],
+                        "RunAtLoad": true
+                    ]
+                    let data = try PropertyListSerialization.data(fromPropertyList: propertyList, format: .xml, options: 0)
+                    try fileManager.createDirectory(at: legacyStartupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try data.write(to: legacyStartupURL, options: .atomic)
+                }
+            }
+        } catch {
+            if #available(macOS 13.0, *), SMAppService.mainApp.status == .requiresApproval {
+                requestStartupApproval()
+            } else {
+                showStartupError(error.localizedDescription)
+            }
+        }
+    }
+
+    @available(macOS 13.0, *)
+    private func requestStartupApproval() {
+        let alert = NSAlert()
+        alert.messageText = "Allow zzwitch to run on startup"
+        alert.informativeText = "Enable zzwitch in System Settings → General → Login Items. A dash in the menu means approval is pending."
+        alert.addButton(withTitle: "Open System Settings")
+        alert.addButton(withTitle: "Later")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+    }
+
+    private func showStartupError(_ message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Could not change startup settings"
+        alert.informativeText = message
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
     @objc func reloadDockApps() {
-        let debugMenu = NSMenu()
+        let dockAppsMenu = NSMenu()
         let urls = dockAppURLs()
         for (i, url) in urls.prefix(9).enumerated() {
             let name = Bundle(url: url)?.infoDictionary?["CFBundleName"] as? String
                 ?? url.deletingPathExtension().lastPathComponent
-            let item = NSMenuItem(title: "\(i + 1): \(name)", action: #selector(debugApp(_:)), keyEquivalent: "")
+            let item = NSMenuItem(title: name, action: #selector(selectDockApp(_:)), keyEquivalent: "\(i + 1)")
+            item.keyEquivalentModifierMask = [.option]
             item.tag = i + 1
             item.target = self
-            debugMenu.addItem(item)
+            dockAppsMenu.addItem(item)
         }
-        debugMenuItem.submenu = debugMenu
+        dockAppsMenuItem.submenu = dockAppsMenu
         refreshShortcutOverlay()
     }
 
@@ -409,9 +510,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // MARK: - Debug
+    // MARK: - Dock menu
 
-    @objc func debugApp(_ sender: NSMenuItem) { activateDockApp(at: sender.tag - 1) }
+    @objc func selectDockApp(_ sender: NSMenuItem) { activateDockApp(at: sender.tag - 1) }
 
     // MARK: -
 

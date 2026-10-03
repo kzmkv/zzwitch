@@ -15,7 +15,7 @@ swiftc -framework Cocoa GenerateIcon.swift -o generate_icon
 iconutil -c icns AppIcon.iconset -o AppIcon.icns
 
 # Compile main app
-swiftc -framework Cocoa zzwitch.swift -o zzwitch
+swiftc -framework Cocoa -framework ServiceManagement zzwitch.swift -o zzwitch
 
 # Create bundle structure
 mkdir -p "$APP/Contents/MacOS"
